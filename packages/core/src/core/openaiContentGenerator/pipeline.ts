@@ -14,6 +14,77 @@ import type { ContentGeneratorConfig } from '../contentGenerator.js';
 import type { OpenAICompatibleProvider } from './provider/index.js';
 import { OpenAIContentConverter } from './converter.js';
 import type { ErrorHandler, RequestContext } from './errorHandler.js';
+import { tokenLimit } from '../tokenLimits.js';
+
+/**
+ * Trim a list of OpenAI messages to fit within the model's context budget.
+ *
+ * Strategy (applied in order until under budget):
+ *  1. Trim the content of large tool-result messages (keep head + tail, drop middle).
+ *  2. Drop the oldest tool-result message pairs from the middle of the conversation.
+ *
+ * Never truncates a tool result below MIN_TOOL_RESULT_CHARS characters.
+ * Targets CONTEXT_BUDGET_RATIO of the model's context window.
+ */
+export function trimMessagesForContextBudget(
+  messages: OpenAI.Chat.ChatCompletionMessageParam[],
+  model: string,
+): OpenAI.Chat.ChatCompletionMessageParam[] {
+  const CONTEXT_BUDGET_RATIO = 0.7;
+  const MIN_TOOL_RESULT_CHARS = 500;
+  const CHARS_PER_TOKEN = 3; // rough estimate: JSON-framed messages
+
+  const contextWindow = tokenLimit(model, 'input');
+  const budget = Math.floor(
+    contextWindow * CONTEXT_BUDGET_RATIO * CHARS_PER_TOKEN,
+  );
+
+  const estimateSize = (
+    msgs: OpenAI.Chat.ChatCompletionMessageParam[],
+  ): number => JSON.stringify(msgs).length;
+
+  if (estimateSize(messages) <= budget) return messages;
+
+  // Step 1: Trim the content of tool-result messages that exceed the budget
+  let trimmed = messages.map((msg) => {
+    if (msg.role !== 'tool') return msg;
+    const content = typeof msg.content === 'string' ? msg.content : '';
+    if (content.length <= MIN_TOOL_RESULT_CHARS) return msg;
+
+    // Keep head and tail, drop middle
+    const keepEach = Math.max(
+      Math.floor(MIN_TOOL_RESULT_CHARS / 2),
+      Math.floor(content.length * 0.1),
+    );
+    if (keepEach * 2 >= content.length) return msg;
+
+    return {
+      ...msg,
+      content:
+        content.slice(0, keepEach) +
+        `\n...[trimmed ${content.length - keepEach * 2} chars]...\n` +
+        content.slice(content.length - keepEach),
+    };
+  });
+
+  if (estimateSize(trimmed) <= budget) return trimmed;
+
+  // Step 2: Drop oldest tool-result pairs from the middle of the conversation.
+  // Preserve the first message (system/user prompt) and the most recent messages.
+  const isToolPair = (msg: OpenAI.Chat.ChatCompletionMessageParam): boolean =>
+    msg.role === 'tool';
+
+  const lo = 1; // skip index 0 (system/first user message)
+  const hi = trimmed.length - 1;
+  while (estimateSize(trimmed) > budget && lo < hi) {
+    // Find oldest tool message in [lo, hi)
+    const idx = trimmed.slice(lo, hi).findIndex(isToolPair);
+    if (idx === -1) break;
+    trimmed = [...trimmed.slice(0, lo + idx), ...trimmed.slice(lo + idx + 1)];
+  }
+
+  return trimmed;
+}
 
 /**
  * Error thrown when the API returns an error embedded as stream content
@@ -300,7 +371,11 @@ export class ContentGenerationPipeline {
     streaming: boolean = false,
     effectiveModel: string,
   ): Promise<OpenAI.Chat.ChatCompletionCreateParams> {
-    const messages = this.converter.convertGeminiRequestToOpenAI(request);
+    let messages = this.converter.convertGeminiRequestToOpenAI(request);
+
+    // Trim messages to fit within the model's context budget to prevent
+    // 400/413 errors from providers with smaller context windows.
+    messages = trimMessagesForContextBudget(messages, effectiveModel);
 
     // Apply provider-specific enhancements
     const baseRequest: OpenAI.Chat.ChatCompletionCreateParams = {
