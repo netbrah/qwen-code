@@ -214,3 +214,29 @@ export function tokenLimit(
   // Return appropriate default based on token type
   return type === 'output' ? DEFAULT_OUTPUT_TOKEN_LIMIT : DEFAULT_TOKEN_LIMIT;
 }
+
+/**
+ * Returns a scaling factor used to estimate token counts from character counts.
+ * Different model families use different tokenization schemes, so the ratio of
+ * characters to tokens varies. Use this factor to adjust rough estimates.
+ *
+ * @param model - The model name
+ * @returns Scaling factor (multiply raw character-based estimate by this value)
+ */
+export function tokenEstimationScaleFactor(model: string): number {
+  const m = normalize(model);
+  if (/claude/.test(m)) return 1.25;
+  if (/gpt|^o\d|codex/.test(m)) return 1.2;
+  return 1.0;
+}
+
+/**
+ * Returns the default maximum output tokens for a given model.
+ * This is a convenience wrapper around tokenLimit(model, 'output').
+ *
+ * @param model - The model name
+ * @returns Maximum number of output tokens for the model
+ */
+export function defaultMaxOutputTokens(model: string): TokenCount {
+  return tokenLimit(model, 'output');
+}

@@ -64,7 +64,7 @@ import {
   replayUiTelemetryFromConversation,
 } from '../services/sessionService.js';
 import { reportError } from '../utils/errorReporting.js';
-import { getErrorMessage } from '../utils/errors.js';
+import { getErrorMessage, isAbortError } from '../utils/errors.js';
 import { checkNextSpeaker } from '../utils/nextSpeakerChecker.js';
 import { flatMapTextParts } from '../utils/partUtils.js';
 import { retryWithBackoff } from '../utils/retry.js';
@@ -571,17 +571,25 @@ export class GeminiClient {
       requestToSent,
       signal,
     );
-    for await (const event of resultStream) {
-      if (!this.config.getSkipLoopDetection()) {
-        if (this.loopDetector.addAndCheck(event)) {
-          yield { type: GeminiEventType.LoopDetected };
+    try {
+      for await (const event of resultStream) {
+        if (!this.config.getSkipLoopDetection()) {
+          if (this.loopDetector.addAndCheck(event)) {
+            yield { type: GeminiEventType.LoopDetected };
+            return turn;
+          }
+        }
+        yield event;
+        if (event.type === GeminiEventType.Error) {
           return turn;
         }
       }
-      yield event;
-      if (event.type === GeminiEventType.Error) {
+    } catch (error) {
+      if (signal?.aborted || isAbortError(error)) {
+        yield { type: GeminiEventType.UserCancelled };
         return turn;
       }
+      throw error;
     }
     // Fire Stop hook through MessageBus (only if hooks are enabled)
     // This must be done before any early returns to ensure hooks are always triggered
