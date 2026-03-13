@@ -94,7 +94,9 @@ storybook-static
 Dockerfile.sea
 sea-config.json
 
-# Work artifacts — RCAs, reports
+# Work artifacts — RCAs, reports, planning docs
 CONTAP-*.md
 *.copilot-reports/
 .copilot-reports/
+AGENT-PROMPTS.md
+CONTRIBUTION-ROADMAP.md
