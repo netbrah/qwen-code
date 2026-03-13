@@ -90,5 +90,11 @@ storybook-static
 .bin/settings.json
 .qwen/settings.json
 .qwen/settings.json.orig
+.qwen/APEX.md
 Dockerfile.sea
 sea-config.json
+
+# Work artifacts — RCAs, reports
+CONTAP-*.md
+*.copilot-reports/
+.copilot-reports/
